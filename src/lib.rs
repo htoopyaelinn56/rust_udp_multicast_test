@@ -104,11 +104,13 @@ impl LanDiscovery {
         // Cleanup expired peers
         let peers_ref = self.peers.clone();
         task::spawn(async move {
-            let mut interval = interval(Duration::from_secs(15));
+            let mut interval = interval(Duration::from_secs(5));
             loop {
                 interval.tick().await;
                 let mut peers = peers_ref.write().await;
-                peers.retain(|_, peer| peer.last_seen.elapsed() < Duration::from_secs(PEER_TIMEOUT_SECS));
+                peers.retain(|_, peer| {
+                    peer.last_seen.elapsed() < Duration::from_secs(PEER_TIMEOUT_SECS)
+                });
             }
         });
     }
@@ -177,4 +179,26 @@ fn get_local_ipv4() -> std::io::Result<Ipv4Addr> {
         }
     }
     Ok(Ipv4Addr::LOCALHOST)
+}
+
+pub async fn start_service(player_name : String) {
+    let discovery = Arc::new(LanDiscovery::new(8080, player_name).await.unwrap());
+    discovery.clone().start().await;
+
+    println!(
+        "LAN Discovery started for {}...",
+        discovery.announce_payload.read().await.name
+    );
+
+    loop {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let peers = discovery.get_peers().await;
+        if !peers.is_empty() {
+            println!(
+                "{} sees peers: {:#?}",
+                discovery.announce_payload.read().await.name,
+                peers
+            );
+        }
+    }
 }
