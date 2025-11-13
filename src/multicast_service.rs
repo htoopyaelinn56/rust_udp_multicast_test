@@ -19,11 +19,12 @@ pub struct Announcement {
     pub port: u16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Peer {
     pub addr: SocketAddr,
     pub name: String,
     pub port: u16,
+    #[serde(skip)]
     pub last_seen: Instant,
 }
 
@@ -164,6 +165,11 @@ impl LanDiscovery {
     pub async fn get_peers(&self) -> Vec<Peer> {
         let peers = self.peers.read().await;
         peers.values().cloned().collect()
+    }
+
+    // Convenience: serialize current peers as JSON bytes
+    pub async fn peers_json(&self) -> Vec<u8> {
+        serde_json::to_vec(&self.get_peers().await).unwrap_or_else(|_| Vec::new())
     }
 }
 
