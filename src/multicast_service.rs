@@ -31,7 +31,7 @@ pub struct Peer {
 const MULTICAST_ADDR: &str = "239.255.255.250";
 const MULTICAST_PORT: u16 = 9999;
 const ANNOUNCE_INTERVAL_SECS: u64 = 2;
-const PEER_TIMEOUT_SECS: u64 = 10;
+const PEER_TIMEOUT_SECS: u64 = 2;
 
 pub struct LanDiscovery {
     peers: Arc<RwLock<HashMap<String, Peer>>>,
@@ -104,7 +104,7 @@ impl LanDiscovery {
         // Cleanup expired peers
         let peers_ref = self.peers.clone();
         task::spawn(async move {
-            let mut interval = interval(Duration::from_secs(5));
+            let mut interval = interval(Duration::from_secs(3));
             loop {
                 interval.tick().await;
                 let mut peers = peers_ref.write().await;

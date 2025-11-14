@@ -14,4 +14,4 @@ local-ip-address = "0.6.5"
 once_cell = "1.17.1"
 
 [lib]
-crate-type = ["rlib", "cdylib"]
+crate-type = ["lib", "cdylib"]

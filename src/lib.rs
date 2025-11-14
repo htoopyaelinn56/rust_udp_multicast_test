@@ -8,7 +8,6 @@ use std::{
 };
 use once_cell::sync::OnceCell;
 use tokio::runtime::Runtime;
-
 use crate::multicast_service::LanDiscovery;
 
 // Global Tokio runtime for FFI callers
