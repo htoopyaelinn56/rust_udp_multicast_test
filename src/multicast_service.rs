@@ -175,14 +175,67 @@ impl LanDiscovery {
 
 // Pick first non-loopback IPv4 interface
 fn get_local_ipv4() -> std::io::Result<Ipv4Addr> {
-    let addrs = local_ip_address::list_afinet_netifas().unwrap();
-    for (_iface, ip) in addrs {
-        if let IpAddr::V4(v4) = ip {
-            if !v4.is_loopback() {
+    // Query available addresses and prefer a useful IPv4 address for multicast
+    // - skip loopback and link-local (169.254.x.x) addresses
+    // - prefer private RFC1918 ranges (10/8, 172.16/12, 192.168/16)
+    let addrs = local_ip_address::list_afinet_netifas().map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::Other, format!("failed to list interfaces: {}", e))
+    })?;
+
+    // Helper to rate an address: higher is better
+    fn score_addr(a: &Ipv4Addr) -> i32 {
+        if a.is_loopback() || a.is_link_local() || a.is_multicast() || a.is_unspecified() {
+            return -1;
+        }
+        let octets = a.octets();
+        match octets {
+            [10, _, _, _] => 80,
+            [172, b, _, _] if (16..=31).contains(&b) => 90,
+            [192, 168, _, _] => 100,
+            _ => 10, // public/global addresses are acceptable but lower priority
+        }
+    }
+
+    let mut best: Option<Ipv4Addr> = None;
+    let mut best_score = -1;
+
+    for (_iface, ip) in &addrs {
+        if let IpAddr::V4(v4) = *ip {
+            let sc = score_addr(&v4);
+            // Skip clearly unsuitable addresses
+            if sc < 0 {
+                continue;
+            }
+            // Prefer higher score
+            if sc > best_score {
+                best_score = sc;
+                best = Some(v4);
+            }
+            // If we found the highest-priority private addr (192.168.x.x),
+            // break early. Don't break for lower-priority private addrs so we
+            // can still discover a 192.168 address later in the list.
+            if best_score >= 100 {
+                break;
+            }
+        } else {
+            // ignore IPv6 here
+        }
+    }
+
+    if let Some(v4) = best {
+        return Ok(v4);
+    }
+
+    // Fallback: try any non-loopback, non-link-local IPv4
+    for (_iface, ip) in &addrs {
+        if let IpAddr::V4(v4) = *ip {
+            if !v4.is_loopback() && !v4.is_link_local() {
                 return Ok(v4);
             }
         }
     }
+
+    // Last resort: return localhost (127.0.0.1)
     Ok(Ipv4Addr::LOCALHOST)
 }
 
