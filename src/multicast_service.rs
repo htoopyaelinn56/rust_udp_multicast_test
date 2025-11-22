@@ -1,3 +1,4 @@
+use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{
@@ -39,6 +40,8 @@ pub struct LanDiscovery {
     listen_socket: UdpSocket,
     pub announce_payload: Arc<RwLock<Announcement>>,
 }
+
+static DISCOVERY: OnceCell<Arc<LanDiscovery>> = OnceCell::new();
 
 impl LanDiscovery {
     pub async fn new(service_port: u16, player_name: String) -> anyhow::Result<Self> {
@@ -179,7 +182,10 @@ fn get_local_ipv4() -> std::io::Result<Ipv4Addr> {
     // - skip loopback and link-local (169.254.x.x) addresses
     // - prefer private RFC1918 ranges (10/8, 172.16/12, 192.168/16)
     let addrs = local_ip_address::list_afinet_netifas().map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::Other, format!("failed to list interfaces: {}", e))
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("failed to list interfaces: {}", e),
+        )
     })?;
 
     // Helper to rate an address: higher is better
@@ -239,8 +245,25 @@ fn get_local_ipv4() -> std::io::Result<Ipv4Addr> {
     Ok(Ipv4Addr::LOCALHOST)
 }
 
-pub async fn start_service(player_name : String)  {
+/// Get a clone of the global LanDiscovery instance, if it has been initialized.
+pub async fn get_peers() -> Vec<Peer> {
+    let discovery = DISCOVERY.get().cloned();
+    if let Some(discovery) = discovery {
+        discovery.get_peers().await
+    } else {
+        Vec::new()
+    }
+}
+
+pub async fn start_service(player_name: String) {
     let discovery = Arc::new(LanDiscovery::new(8080, player_name).await.unwrap());
+
+    // Try to set the global instance. If it's already set, we just reuse it.
+    let discovery = match DISCOVERY.set(discovery.clone()) {
+        Ok(()) => discovery,
+        Err(_) => DISCOVERY.get().unwrap().clone(),
+    };
+
     discovery.clone().start().await;
 
     println!(
