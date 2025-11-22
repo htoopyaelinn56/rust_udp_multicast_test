@@ -245,13 +245,15 @@ fn get_local_ipv4() -> std::io::Result<Ipv4Addr> {
     Ok(Ipv4Addr::LOCALHOST)
 }
 
-/// Get a clone of the global LanDiscovery instance, if it has been initialized.
-pub async fn get_peers() -> Vec<Peer> {
-    let discovery = DISCOVERY.get().cloned();
-    if let Some(discovery) = discovery {
-        discovery.get_peers().await
+/// Get current peers as a JSON string from the global discovery instance.
+pub async fn get_peers() -> String {
+    if let Some(discovery) = DISCOVERY.get().cloned() {
+        // Use the instance method to get JSON bytes and convert to String.
+        let bytes = discovery.peers_json().await;
+        String::from_utf8(bytes).unwrap_or_else(|_| "[]".to_string())
     } else {
-        Vec::new()
+        // If discovery is not started yet, return an empty JSON array.
+        "[]".to_string()
     }
 }
 
