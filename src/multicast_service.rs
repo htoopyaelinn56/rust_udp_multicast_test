@@ -257,6 +257,11 @@ pub async fn get_peers() -> String {
     }
 }
 
+pub fn get_peers_sync() -> String {
+    let rt = tokio::runtime::Handle::current();
+    rt.block_on(get_peers())
+}
+
 pub async fn start_service(player_name: String) {
     let discovery = Arc::new(LanDiscovery::new(8080, player_name).await.unwrap());
 
@@ -284,4 +289,9 @@ pub async fn start_service(player_name: String) {
             );
         }
     }
+}
+
+pub fn start_service_sync(player_name: String) {
+    let rt = tokio::runtime::Handle::current();
+    rt.block_on(start_service(player_name));
 }
