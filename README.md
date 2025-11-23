@@ -1,7 +1,7 @@
 # rust_udp_multicast_test
 
 # TODO
-- [ ] Allow the user to stop_service 
+- [x] Allow the user to stop_service 
 
 Simple LAN peer discovery in Rust using UDP multicast.
 
