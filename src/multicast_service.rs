@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::{
     net::UdpSocket,
     sync::RwLock,
@@ -39,6 +40,7 @@ pub struct LanDiscovery {
     announce_socket: UdpSocket,
     listen_socket: UdpSocket,
     pub announce_payload: Arc<RwLock<Announcement>>,
+    pub shutdown: Arc<AtomicBool>, // flag to stop outer service loop and worker tasks
 }
 
 static DISCOVERY: OnceCell<Arc<LanDiscovery>> = OnceCell::new();
@@ -87,6 +89,7 @@ impl LanDiscovery {
             announce_socket,
             listen_socket,
             announce_payload: Arc::new(RwLock::new(announce_payload)),
+            shutdown: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -106,15 +109,17 @@ impl LanDiscovery {
 
         // Cleanup expired peers
         let peers_ref = self.peers.clone();
+        let shutdown_ref = self.shutdown.clone();
         task::spawn(async move {
             let mut interval = interval(Duration::from_secs(3));
             loop {
+                if shutdown_ref.load(Ordering::Relaxed) { break; }
                 interval.tick().await;
+                if shutdown_ref.load(Ordering::Relaxed) { break; }
                 let mut peers = peers_ref.write().await;
-                peers.retain(|_, peer| {
-                    peer.last_seen.elapsed() < Duration::from_secs(PEER_TIMEOUT_SECS)
-                });
+                peers.retain(|_, peer| peer.last_seen.elapsed() < Duration::from_secs(PEER_TIMEOUT_SECS));
             }
+            // Optional: final cleanup if needed
         });
     }
 
@@ -122,9 +127,10 @@ impl LanDiscovery {
         let multicast: Ipv4Addr = MULTICAST_ADDR.parse().unwrap();
         let target = SocketAddr::new(IpAddr::V4(multicast), MULTICAST_PORT);
         let mut interval = time::interval(Duration::from_secs(ANNOUNCE_INTERVAL_SECS));
-
         loop {
+            if self.shutdown.load(Ordering::Relaxed) { break; }
             interval.tick().await;
+            if self.shutdown.load(Ordering::Relaxed) { break; }
             let announce = self.announce_payload.read().await;
             if let Ok(data) = serde_json::to_vec(&*announce) {
                 if let Err(e) = self.announce_socket.send_to(&data, &target).await {
@@ -132,36 +138,40 @@ impl LanDiscovery {
                 }
             }
         }
+        // println!("Announcer task stopped");
     }
 
     async fn run_listener(&self) {
         let mut buf = [0u8; 4096];
         loop {
-            match self.listen_socket.recv_from(&mut buf).await {
-                Ok((len, src)) => {
-                    if let Ok(msg) = serde_json::from_slice::<Announcement>(&buf[..len]) {
-                        let my_name = self.announce_payload.read().await.name.clone();
-                        if msg.name == my_name {
-                            continue; // skip self
+            if self.shutdown.load(Ordering::Relaxed) { break; }
+            tokio::select! {
+                biased;
+                _ = async {
+                    // Simple check path to allow early break before blocking recv
+                    if self.shutdown.load(Ordering::Relaxed) { return; }
+                } => { break; }
+                res = self.listen_socket.recv_from(&mut buf) => {
+                    if self.shutdown.load(Ordering::Relaxed) { break; }
+                    match res {
+                        Ok((len, src)) => {
+                            if let Ok(msg) = serde_json::from_slice::<Announcement>(&buf[..len]) {
+                                let my_name = self.announce_payload.read().await.name.clone();
+                                if msg.name == my_name { continue; }
+                                let mut peers = self.peers.write().await;
+                                peers.insert(msg.name.clone(), Peer { addr: src, name: msg.name.clone(), port: msg.port, last_seen: Instant::now() });
+                            } else {
+                                println!("Failed to parse announcement from {}", src);
+                            }
                         }
-
-                        let mut peers = self.peers.write().await;
-                        peers.insert(
-                            msg.name.clone(),
-                            Peer {
-                                addr: src,
-                                name: msg.name.clone(),
-                                port: msg.port,
-                                last_seen: Instant::now(),
-                            },
-                        );
-                    } else {
-                        println!("Failed to parse announcement from {}", src);
+                        Err(e) => {
+                            eprintln!("Listener error: {:?}", e);
+                        }
                     }
                 }
-                Err(e) => eprintln!("Listener error: {:?}", e),
             }
         }
+        // println!("Listener task stopped");
     }
 
     // Return all alive peers at once
@@ -267,7 +277,12 @@ pub async fn start_service(player_name: String) {
     // Try to set the global instance. If it's already set, we just reuse it.
     let discovery = match DISCOVERY.set(discovery.clone()) {
         Ok(()) => discovery,
-        Err(_) => DISCOVERY.get().unwrap().clone(),
+        Err(_) => {
+            let existing = DISCOVERY.get().unwrap().clone();
+            // Reset shutdown flag for restart
+            existing.shutdown.store(false, Ordering::Relaxed);
+            existing
+        }
     };
 
     discovery.clone().start().await;
@@ -277,7 +292,7 @@ pub async fn start_service(player_name: String) {
         discovery.announce_payload.read().await.name
     );
 
-    loop {
+    while !discovery.shutdown.load(Ordering::Relaxed) {
         tokio::time::sleep(Duration::from_secs(5)).await;
         let peers = discovery.get_peers().await;
         if !peers.is_empty() {
@@ -288,8 +303,20 @@ pub async fn start_service(player_name: String) {
             );
         }
     }
+
+    println!("LAN Discovery loop stopped.");
 }
 
 pub fn start_service_sync(player_name: String) {
     futures::executor::block_on(start_service(player_name));
+}
+
+pub async fn stop_service() {
+    if let Some(discovery) = DISCOVERY.get() {
+        discovery.shutdown.store(true, Ordering::Relaxed);
+    }
+}
+
+pub fn stop_service_sync() {
+    futures::executor::block_on(stop_service());
 }
