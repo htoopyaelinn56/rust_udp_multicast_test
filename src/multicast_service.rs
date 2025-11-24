@@ -255,6 +255,14 @@ fn get_local_ipv4() -> std::io::Result<Ipv4Addr> {
     Ok(Ipv4Addr::LOCALHOST)
 }
 
+/// Get local IPv4 address as a string.
+pub fn get_local_ipv4_in_string() -> String {
+    match get_local_ipv4() {
+        Ok(ip) => ip.to_string(),
+        Err(_) => "".to_string(),
+    }
+}
+
 /// Get current peers as a JSON string from the global discovery instance.
 pub async fn get_peers() -> String {
     if let Some(discovery) = DISCOVERY.get().cloned() {
